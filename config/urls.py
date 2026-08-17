@@ -25,7 +25,6 @@ def home(request):
     }})
 
 urlpatterns = [
-    path('', home),  # Startseite
     path('admin/', admin.site.urls),
     path('api/', include('lms.urls')),
 ]
