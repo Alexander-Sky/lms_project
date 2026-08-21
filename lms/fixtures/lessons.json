@@ -1,0 +1,46 @@
+[
+  {
+    "model": "lms.lesson",
+    "pk": 1,
+    "fields": {
+      "course": 1,
+      "name": "Что такое сериализатор",
+      "description": "Как DRF превращает объекты модели в JSON и обратно.",
+      "preview": "",
+      "video_url": "https://example.com/drf/lesson-1"
+    }
+  },
+  {
+    "model": "lms.lesson",
+    "pk": 2,
+    "fields": {
+      "course": 1,
+      "name": "SerializerMethodField",
+      "description": "Вычисляемые поля: считаем количество уроков курса.",
+      "preview": "",
+      "video_url": "https://example.com/drf/lesson-2"
+    }
+  },
+  {
+    "model": "lms.lesson",
+    "pk": 3,
+    "fields": {
+      "course": 1,
+      "name": "Вложенные сериализаторы",
+      "description": "Выводим связанные объекты внутри родительского сериализатора.",
+      "preview": "",
+      "video_url": "https://example.com/drf/lesson-3"
+    }
+  },
+  {
+    "model": "lms.lesson",
+    "pk": 4,
+    "fields": {
+      "course": 2,
+      "name": "Списки и словари",
+      "description": "Основные коллекции Python и когда какую выбирать.",
+      "preview": "",
+      "video_url": "https://example.com/python/lesson-1"
+    }
+  }
+]
