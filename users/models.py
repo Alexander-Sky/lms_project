@@ -58,14 +58,14 @@ class Payment(models.Model):
     payment_date = models.DateField(verbose_name='Дата оплаты')
     paid_course = models.ForeignKey(
         'lms.Course',
-        on_delete=models.SET_NULL,
+        on_delete=models.PROTECT,
         related_name='payments',
         verbose_name='Оплаченный курс',
         **NULLABLE,
     )
     paid_lesson = models.ForeignKey(
         'lms.Lesson',
-        on_delete=models.SET_NULL,
+        on_delete=models.PROTECT,
         related_name='payments',
         verbose_name='Оплаченный урок',
         **NULLABLE,
@@ -86,6 +86,16 @@ class Payment(models.Model):
         verbose_name = 'Платёж'
         verbose_name_plural = 'Платежи'
         ordering = ('-payment_date',)
+        constraints = [
+            # Платёж относится либо к курсу, либо к уроку — ровно к одному из двух.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(paid_course__isnull=False, paid_lesson__isnull=True)
+                    | models.Q(paid_course__isnull=True, paid_lesson__isnull=False)
+                ),
+                name='payment_has_exactly_one_target',
+            ),
+        ]
 
     def __str__(self):
         paid_for = self.paid_course or self.paid_lesson or 'без привязки'
