@@ -1,0 +1,20 @@
+[
+  {
+    "model": "lms.course",
+    "pk": 1,
+    "fields": {
+      "name": "Django REST Framework с нуля",
+      "preview": "",
+      "description": "Курс о том, как строить REST API на Django: сериализаторы, вьюсеты, дженерики, фильтрация."
+    }
+  },
+  {
+    "model": "lms.course",
+    "pk": 2,
+    "fields": {
+      "name": "Основы Python",
+      "preview": "",
+      "description": "Базовый курс: типы данных, функции, ООП, работа с файлами."
+    }
+  }
+]

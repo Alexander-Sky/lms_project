@@ -1,6 +1,9 @@
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.db import models
 
+NULLABLE = {'blank': True, 'null': True}
+
+
 class UserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
         if not email:
@@ -15,6 +18,7 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
         return self.create_user(email, password, **extra_fields)
+
 
 class User(AbstractBaseUser, PermissionsMixin):
     email = models.EmailField(unique=True)
@@ -32,3 +36,57 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return self.email
+
+
+class Payment(models.Model):
+    """Платёж пользователя за курс или за отдельный урок."""
+
+    CASH = 'cash'
+    TRANSFER = 'transfer'
+
+    PAYMENT_METHOD_CHOICES = [
+        (CASH, 'Наличные'),
+        (TRANSFER, 'Перевод на счет'),
+    ]
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='payments',
+        verbose_name='Пользователь',
+    )
+    payment_date = models.DateField(verbose_name='Дата оплаты')
+    paid_course = models.ForeignKey(
+        'lms.Course',
+        on_delete=models.SET_NULL,
+        related_name='payments',
+        verbose_name='Оплаченный курс',
+        **NULLABLE,
+    )
+    paid_lesson = models.ForeignKey(
+        'lms.Lesson',
+        on_delete=models.SET_NULL,
+        related_name='payments',
+        verbose_name='Оплаченный урок',
+        **NULLABLE,
+    )
+    amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        verbose_name='Сумма оплаты',
+    )
+    payment_method = models.CharField(
+        max_length=20,
+        choices=PAYMENT_METHOD_CHOICES,
+        default=TRANSFER,
+        verbose_name='Способ оплаты',
+    )
+
+    class Meta:
+        verbose_name = 'Платёж'
+        verbose_name_plural = 'Платежи'
+        ordering = ('-payment_date',)
+
+    def __str__(self):
+        paid_for = self.paid_course or self.paid_lesson or 'без привязки'
+        return f'{self.user} — {paid_for} — {self.amount}'

@@ -21,10 +21,14 @@ from django.http import JsonResponse
 def home(request):
     return JsonResponse({"message": "LMS API is running!", "endpoints": {
         "courses": "/api/courses/",
-        "lessons": "/api/lessons/"
+        "lessons": "/api/lessons/",
+        "payments": "/api/payments/",
+        "user profile": "/api/users/<id>/",
     }})
 
 urlpatterns = [
+    path('', home, name='home'),
     path('admin/', admin.site.urls),
     path('api/', include('lms.urls')),
+    path('api/', include('users.urls')),
 ]
