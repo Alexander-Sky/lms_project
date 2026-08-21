@@ -2,12 +2,12 @@ from rest_framework import viewsets, generics
 from .models import Course, Lesson
 from .serializers import CourseSerializer, LessonSerializer
 
-# Course – mit ViewSet (alle CRUD-Operationen)
+# Course – ViewSet (alle CRUD-Operationen)
 class CourseViewSet(viewsets.ModelViewSet):
     queryset = Course.objects.all()
     serializer_class = CourseSerializer
 
-# Lesson – mit Generic (einzeln)
+# Lesson – mit Generic
 class LessonListCreateView(generics.ListCreateAPIView):
     queryset = Lesson.objects.all()
     serializer_class = LessonSerializer
