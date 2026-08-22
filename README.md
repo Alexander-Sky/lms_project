@@ -46,6 +46,22 @@ poetry run python manage.py createsuperuser
 
 **Payment** — пользователь (FK), дата оплаты, оплаченный курс (FK, nullable), оплаченный урок (FK, nullable), сумма, способ оплаты (`cash` — наличные, `transfer` — перевод на счет).
 
+### Целостность данных платежа
+
+Платёж относится либо к курсу, либо к уроку — ровно к одному из двух. Правило закреплено на уровне базы:
+
+```python
+models.CheckConstraint(
+    condition=(
+        models.Q(paid_course__isnull=False, paid_lesson__isnull=True)
+        | models.Q(paid_course__isnull=True, paid_lesson__isnull=False)
+    ),
+    name='payment_has_exactly_one_target',
+)
+```
+
+Оба FK стоят с `on_delete=PROTECT`: курс или урок нельзя удалить, пока за него есть платежи — попытка вернёт `ProtectedError`. `SET_NULL` здесь не подходит: при удалении курса поле обнулилось бы и запись нарушила бы констрейнт.
+
 ## API
 
 ### Курсы
@@ -111,7 +127,7 @@ poetry run python manage.py createsuperuser
 |---|---|---|
 | GET | `/api/users/<id>/` | Профиль с полной историей платежей |
 
-История платежей отдаётся расширенным сериализатором: вместо id курса и урока — вложенные объекты. Дополнительно считается `payments_total` — сумма всех платежей пользователя.
+История платежей отдаётся расширенным сериализатором: вместо id курса и урока — вложенные объекты. Дополнительно считается `payments_total` — сумма всех платежей пользователя, через `aggregate(Sum('amount'))` на стороне базы.
 
 ## Фикстуры
 
@@ -121,6 +137,8 @@ poetry run python manage.py createsuperuser
 | `lms/fixtures/courses.json` | 2 курса |
 | `lms/fixtures/lessons.json` | 4 урока |
 | `users/fixtures/payments.json` | 6 платежей |
+
+В каждом платеже заполнено ровно одно из полей `paid_course` / `paid_lesson` — иначе загрузка упадёт на констрейнте.
 
 Загружать в этом порядке — платежи ссылаются на пользователей, курсы и уроки:
 
