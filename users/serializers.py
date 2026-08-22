@@ -1,3 +1,4 @@
+from django.db.models import Sum
 from rest_framework import serializers
 
 from lms.serializers import CourseSerializer, LessonSerializer
@@ -47,5 +48,6 @@ class UserSerializer(serializers.ModelSerializer):
         )
 
     def get_payments_total(self, obj: User) -> float:
-        """Сумма всех платежей пользователя."""
-        return sum(payment.amount for payment in obj.payments.all())
+        """Сумма всех платежей пользователя — считает база одним SELECT SUM()."""
+        total = obj.payments.aggregate(total=Sum('amount'))['total']
+        return float(total or 0)
