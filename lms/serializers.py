@@ -8,15 +8,16 @@ class LessonSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Lesson
-        fields = '__all__'
+        fields = ('id', 'name', 'description', 'preview', 'video_url', 'course', 'owner')
+        read_only_fields = ('owner',)
 
 
 class CourseSerializer(serializers.ModelSerializer):
     """Сериализатор для курса.
 
-    lessons_count — количество уроков курса (задание 1),
-    lessons — полная информация по всем урокам курса (задание 3).
-    Оба поля отдаются одним сериализатором одновременно.
+    lessons_count — количество уроков курса,
+    lessons — полная информация по всем урокам курса.
+    Владелец проставляется во вьюхе и на запись не принимается.
     """
 
     lessons_count = serializers.SerializerMethodField(read_only=True)
@@ -29,9 +30,11 @@ class CourseSerializer(serializers.ModelSerializer):
             'name',
             'preview',
             'description',
+            'owner',
             'lessons_count',
             'lessons',
         )
+        read_only_fields = ('owner',)
 
     def get_lessons_count(self, obj: Course) -> int:
         """Считает уроки курса через related_name='lessons'."""
