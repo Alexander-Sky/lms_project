@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+from datetime import timedelta
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -37,18 +38,32 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'rest_framework',      # DRF
-    'django_filters',      # Filter für DRF
-    'users',               # User-App
-    'lms',                 # Course + Lesson
+    'rest_framework',                    # DRF
+    'rest_framework_simplejwt',          # JWT-Authentifizierung
+    'django_filters',                    # Filter für DRF
+    'users',                             # User-App
+    'lms',                               # Course + Lesson
 ]
 
-# DRF: Filter- und Sortier-Backends für alle Views
+# DRF: аутентификация, права и фильтры на уровне всего проекта.
+# По умолчанию каждый эндпоинт закрыт — доступ только с JWT-токеном.
+# Открытые эндпоинты (регистрация, получение токена) объявляют AllowAny явно.
 REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
     'DEFAULT_FILTER_BACKENDS': [
         'django_filters.rest_framework.DjangoFilterBackend',
         'rest_framework.filters.OrderingFilter',
     ],
+}
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
 }
 
 MIDDLEWARE = [

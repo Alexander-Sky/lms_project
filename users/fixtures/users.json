@@ -7,6 +7,8 @@
       "last_login": null,
       "is_superuser": false,
       "email": "anna@example.com",
+      "first_name": "Анна",
+      "last_name": "Ковальчук",
       "phone": "+43 660 1234567",
       "city": "Wien",
       "avatar": "",
@@ -24,12 +26,33 @@
       "last_login": null,
       "is_superuser": false,
       "email": "boris@example.com",
+      "first_name": "Борис",
+      "last_name": "Науменко",
       "phone": "+49 151 7654321",
       "city": "Berlin",
       "avatar": "",
       "is_active": true,
       "is_staff": false,
       "groups": [],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "users.user",
+    "pk": 3,
+    "fields": {
+      "password": "pbkdf2_sha256$1000000$Ee8uaMBGs1Tue4VQLwcrPd$yTAU3sN9Q0GqOzx/EhwqdxgMc+oEhlu2cLTwWxrWWyI=",
+      "last_login": null,
+      "is_superuser": false,
+      "email": "moder@example.com",
+      "first_name": "Мария",
+      "last_name": "Штерн",
+      "phone": "+43 660 9998877",
+      "city": "Graz",
+      "avatar": "",
+      "is_active": true,
+      "is_staff": false,
+      "groups": [1],
       "user_permissions": []
     }
   }

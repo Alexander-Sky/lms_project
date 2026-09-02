@@ -7,7 +7,8 @@
       "name": "Что такое сериализатор",
       "description": "Как DRF превращает объекты модели в JSON и обратно.",
       "preview": "",
-      "video_url": "https://example.com/drf/lesson-1"
+      "video_url": "https://example.com/drf/lesson-1",
+      "owner": 1
     }
   },
   {
@@ -18,7 +19,8 @@
       "name": "SerializerMethodField",
       "description": "Вычисляемые поля: считаем количество уроков курса.",
       "preview": "",
-      "video_url": "https://example.com/drf/lesson-2"
+      "video_url": "https://example.com/drf/lesson-2",
+      "owner": 1
     }
   },
   {
@@ -29,7 +31,8 @@
       "name": "Вложенные сериализаторы",
       "description": "Выводим связанные объекты внутри родительского сериализатора.",
       "preview": "",
-      "video_url": "https://example.com/drf/lesson-3"
+      "video_url": "https://example.com/drf/lesson-3",
+      "owner": 1
     }
   },
   {
@@ -40,7 +43,8 @@
       "name": "Списки и словари",
       "description": "Основные коллекции Python и когда какую выбирать.",
       "preview": "",
-      "video_url": "https://example.com/python/lesson-1"
+      "video_url": "https://example.com/python/lesson-1",
+      "owner": 2
     }
   }
 ]

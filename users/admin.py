@@ -5,9 +5,10 @@ from .models import Payment, User
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
-    list_display = ('id', 'email', 'city', 'is_active', 'is_staff')
-    list_filter = ('is_active', 'is_staff')
-    search_fields = ('email', 'city')
+    list_display = ('id', 'email', 'first_name', 'last_name', 'city', 'is_active', 'is_staff')
+    list_filter = ('is_active', 'is_staff', 'groups')
+    search_fields = ('email', 'first_name', 'last_name', 'city')
+    filter_horizontal = ('groups', 'user_permissions')
 
 
 @admin.register(Payment)
