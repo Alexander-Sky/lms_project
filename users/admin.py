@@ -13,6 +13,10 @@ class UserAdmin(admin.ModelAdmin):
 
 @admin.register(Payment)
 class PaymentAdmin(admin.ModelAdmin):
-    list_display = ('id', 'user', 'payment_date', 'paid_course', 'paid_lesson', 'amount', 'payment_method')
-    list_filter = ('payment_method', 'payment_date', 'paid_course', 'paid_lesson')
-    search_fields = ('user__email',)
+    list_display = (
+        'id', 'user', 'payment_date', 'paid_course', 'paid_lesson',
+        'amount', 'payment_method', 'status',
+    )
+    list_filter = ('status', 'payment_method', 'payment_date', 'paid_course', 'paid_lesson')
+    search_fields = ('user__email', 'session_id')
+    readonly_fields = ('stripe_product_id', 'stripe_price_id', 'session_id', 'payment_link')
