@@ -1,11 +1,20 @@
 from datetime import date
+from decimal import Decimal
+from unittest.mock import patch
 
+import stripe
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from lms.models import Course
+from lms.models import Course, Lesson
 from users.models import Payment, User
+from users.services import (
+    create_stripe_price,
+    create_stripe_product,
+    create_stripe_session,
+    retrieve_stripe_session,
+)
 
 PASSWORD = 'Str0ngPass!42'
 
@@ -258,3 +267,247 @@ class UserModelTestCase(APITestCase):
 
         self.assertIn('Курс для строки', str(payment))
         self.assertIn('pay@test.ru', str(payment))
+
+
+class DocumentationTestCase(APITestCase):
+    """Документация доступна и отдаётся без токена."""
+
+    def test_schema_is_public(self):
+        response = self.client.get('/api/schema/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_swagger_is_public(self):
+        response = self.client.get('/api/docs/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_redoc_is_public(self):
+        response = self.client.get('/api/redoc/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_schema_contains_all_endpoints(self):
+        schema = self.client.get('/api/schema/', {'format': 'json'}).json()
+        paths = schema['paths']
+
+        for path in (
+            '/api/register/',
+            '/api/login/',
+            '/api/token/refresh/',
+            '/api/users/',
+            '/api/courses/',
+            '/api/lessons/',
+            '/api/subscription/',
+            '/api/payments/',
+            '/api/payments/create/',
+            '/api/payments/{id}/status/',
+        ):
+            self.assertIn(path, paths, f'В схеме нет {path}')
+
+    def test_subscription_body_is_documented(self):
+        """У нестандартного эндпоинта описано тело запроса."""
+        schema = self.client.get('/api/schema/', {'format': 'json'}).json()
+        post = schema['paths']['/api/subscription/']['post']
+
+        self.assertIn('requestBody', post)
+        self.assertIn('200', post['responses'])
+        self.assertIn('404', post['responses'])
+
+
+class PaymentCreateTestCase(APITestCase):
+    """Создание платежа и оплата через Stripe. Stripe замокан."""
+
+    def setUp(self):
+        self.user = User.objects.create(email='payer@test.ru')
+        self.course = Course.objects.create(name='Платный курс', price=Decimal('1000.00'), owner=self.user)
+        self.free_course = Course.objects.create(name='Бесплатный курс', price=0, owner=self.user)
+        self.lesson = Lesson.objects.create(
+            name='Платный урок', course=self.course, price=Decimal('150.00'), owner=self.user,
+        )
+        self.url = reverse('users:payment-create')
+        self.client.force_authenticate(user=self.user)
+
+    def _mock_stripe(self):
+        """Подменяет три сервисные функции разом."""
+        return (
+            patch('users.views.create_stripe_product', return_value='prod_TEST'),
+            patch('users.views.create_stripe_price', return_value='price_TEST'),
+            patch('users.views.create_stripe_session', return_value=('cs_test_123', 'https://checkout.stripe.com/pay/cs_test_123')),
+        )
+
+    def test_anonymous_cannot_create_payment(self):
+        self.client.force_authenticate(user=None)
+        response = self.client.post(self.url, {'paid_course': self.course.pk})
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_payment_for_course_returns_link(self):
+        product, price, session = self._mock_stripe()
+        with product, price, session:
+            response = self.client.post(self.url, {'paid_course': self.course.pk})
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.json()
+        self.assertEqual(data['payment_link'], 'https://checkout.stripe.com/pay/cs_test_123')
+        self.assertEqual(data['session_id'], 'cs_test_123')
+        self.assertEqual(data['status'], Payment.PENDING)
+
+    def test_payment_saves_stripe_ids_and_owner(self):
+        product, price, session = self._mock_stripe()
+        with product, price, session:
+            self.client.post(self.url, {'paid_course': self.course.pk})
+
+        payment = Payment.objects.get()
+        self.assertEqual(payment.user, self.user)
+        self.assertEqual(payment.stripe_product_id, 'prod_TEST')
+        self.assertEqual(payment.stripe_price_id, 'price_TEST')
+        self.assertEqual(payment.amount, self.course.price)
+
+    def test_price_is_sent_to_stripe_in_kopecks(self):
+        product, price, session = self._mock_stripe()
+        with product, price as price_mock, session:
+            self.client.post(self.url, {'paid_course': self.course.pk})
+
+        self.assertEqual(price_mock.call_args.kwargs['amount'], Decimal('1000.00'))
+
+    def test_payment_for_lesson(self):
+        product, price, session = self._mock_stripe()
+        with product, price, session:
+            response = self.client.post(self.url, {'paid_lesson': self.lesson.pk})
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Payment.objects.get().paid_lesson, self.lesson)
+
+    def test_both_course_and_lesson_is_rejected(self):
+        response = self.client.post(
+            self.url, {'paid_course': self.course.pk, 'paid_lesson': self.lesson.pk},
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_nothing_to_pay_for_is_rejected(self):
+        response = self.client.post(self.url, {})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_zero_price_is_rejected(self):
+        response = self.client.post(self.url, {'paid_course': self.free_course.pk})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('price', response.json())
+
+    def test_stripe_error_returns_502(self):
+        with patch('users.views.create_stripe_product', side_effect=stripe.StripeError('нет ключа')):
+            response = self.client.post(self.url, {'paid_course': self.course.pk})
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertEqual(Payment.objects.count(), 0)
+
+
+class PaymentStatusTestCase(APITestCase):
+    """Проверка статуса оплаты через Session Retrieve."""
+
+    def setUp(self):
+        self.user = User.objects.create(email='payer@test.ru')
+        self.other = User.objects.create(email='other@test.ru')
+        self.course = Course.objects.create(name='Курс', price=Decimal('100.00'), owner=self.user)
+
+        self.payment = Payment.objects.create(
+            user=self.user, payment_date=date(2026, 9, 1), paid_course=self.course,
+            amount=Decimal('100.00'), session_id='cs_test_123',
+        )
+        self.offline_payment = Payment.objects.create(
+            user=self.user, payment_date=date(2026, 9, 1), paid_course=self.course,
+            amount=Decimal('100.00'), payment_method=Payment.CASH,
+        )
+        self.url = reverse('users:payment-status', args=(self.payment.pk,))
+        self.client.force_authenticate(user=self.user)
+
+    def test_paid_session_updates_status(self):
+        session = {'id': 'cs_test_123', 'status': 'complete', 'payment_status': 'paid',
+                   'amount_total': 10000, 'currency': 'rub', 'url': None}
+
+        with patch('users.views.retrieve_stripe_session', return_value=session):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()['payment_status'], 'paid')
+        self.payment.refresh_from_db()
+        self.assertEqual(self.payment.status, Payment.PAID)
+
+    def test_expired_session_cancels_payment(self):
+        session = {'id': 'cs_test_123', 'status': 'expired', 'payment_status': 'unpaid',
+                   'amount_total': 10000, 'currency': 'rub', 'url': None}
+
+        with patch('users.views.retrieve_stripe_session', return_value=session):
+            self.client.get(self.url)
+
+        self.payment.refresh_from_db()
+        self.assertEqual(self.payment.status, Payment.CANCELED)
+
+    def test_open_session_keeps_pending(self):
+        session = {'id': 'cs_test_123', 'status': 'open', 'payment_status': 'unpaid',
+                   'amount_total': 10000, 'currency': 'rub', 'url': 'https://checkout.stripe.com/x'}
+
+        with patch('users.views.retrieve_stripe_session', return_value=session):
+            self.client.get(self.url)
+
+        self.payment.refresh_from_db()
+        self.assertEqual(self.payment.status, Payment.PENDING)
+
+    def test_other_user_gets_404(self):
+        self.client.force_authenticate(user=self.other)
+        with patch('users.views.retrieve_stripe_session') as mocked:
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        mocked.assert_not_called()
+
+    def test_payment_without_session_returns_400(self):
+        url = reverse('users:payment-status', args=(self.offline_payment.pk,))
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_stripe_error_returns_502(self):
+        with patch('users.views.retrieve_stripe_session', side_effect=stripe.StripeError('boom')):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+
+
+class StripeServiceTestCase(APITestCase):
+    """Сервисные функции: что именно уходит в Stripe."""
+
+    def test_product_is_created_with_name(self):
+        with patch('stripe.Product.create', return_value={'id': 'prod_1'}) as mocked:
+            product_id = create_stripe_product('Курс по Django', 'Описание')
+
+        self.assertEqual(product_id, 'prod_1')
+        self.assertEqual(mocked.call_args.kwargs['name'], 'Курс по Django')
+
+    def test_price_is_converted_to_kopecks(self):
+        with patch('stripe.Price.create', return_value={'id': 'price_1'}) as mocked:
+            price_id = create_stripe_price('prod_1', Decimal('1234.56'))
+
+        self.assertEqual(price_id, 'price_1')
+        self.assertEqual(mocked.call_args.kwargs['unit_amount'], 123456)
+        self.assertEqual(mocked.call_args.kwargs['product'], 'prod_1')
+        self.assertEqual(mocked.call_args.kwargs['currency'], 'rub')
+
+    def test_session_gets_price_id_and_returns_link(self):
+        stripe_session = {'id': 'cs_1', 'url': 'https://checkout.stripe.com/pay/cs_1'}
+
+        with patch('stripe.checkout.Session.create', return_value=stripe_session) as mocked:
+            session_id, link = create_stripe_session('price_1')
+
+        self.assertEqual(session_id, 'cs_1')
+        self.assertEqual(link, 'https://checkout.stripe.com/pay/cs_1')
+        self.assertEqual(mocked.call_args.kwargs['line_items'], [{'price': 'price_1', 'quantity': 1}])
+        self.assertEqual(mocked.call_args.kwargs['mode'], 'payment')
+
+    def test_retrieve_returns_status_fields(self):
+        stripe_session = {
+            'id': 'cs_1', 'status': 'complete', 'payment_status': 'paid',
+            'amount_total': 123456, 'currency': 'rub', 'url': None,
+        }
+
+        with patch('stripe.checkout.Session.retrieve', return_value=stripe_session):
+            data = retrieve_stripe_session('cs_1')
+
+        self.assertEqual(data['payment_status'], 'paid')
+        self.assertEqual(data['amount_total'], 123456)
