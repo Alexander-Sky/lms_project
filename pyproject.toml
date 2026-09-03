@@ -13,7 +13,10 @@ dependencies = [
     "djangorestframework-stubs (>=3.18.0,<4.0.0)",
     "pillow (>=12.3.0,<13.0.0)",
     "django-filter (>=26.1,<27.0)",
-    "djangorestframework-simplejwt (>=5.5.1,<6.0.0)"
+    "djangorestframework-simplejwt (>=5.5.1,<6.0.0)",
+    "drf-spectacular (>=0.30.0,<0.31.0)",
+    "stripe (>=15.6.1,<16.0.0)",
+    "python-dotenv (>=1.2.3,<2.0.0)"
 ]
 
 

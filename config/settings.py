@@ -10,8 +10,13 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+import os
 from datetime import timedelta
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -21,10 +26,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-rj#rxh#j_80o7b_#7$ll!v0$q9(@lsw%+c(!e$wj&45#mvziaj'
+SECRET_KEY = os.getenv(
+    'SECRET_KEY',
+    'django-insecure-rj#rxh#j_80o7b_#7$ll!v0$q9(@lsw%+c(!e$wj&45#mvziaj',
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
 ALLOWED_HOSTS = []
 
@@ -40,6 +48,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',                    # DRF
     'rest_framework_simplejwt',          # JWT-Authentifizierung
+    'drf_spectacular',                   # OpenAPI-Dokumentation
     'django_filters',                    # Filter für DRF
     'users',                             # User-App
     'lms',                               # Course + Lesson
@@ -58,6 +67,28 @@ REST_FRAMEWORK = {
     'DEFAULT_FILTER_BACKENDS': [
         'django_filters.rest_framework.DjangoFilterBackend',
         'rest_framework.filters.OrderingFilter',
+    ],
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+# Настройки генератора OpenAPI-документации
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'LMS API',
+    'DESCRIPTION': (
+        'API учебной платформы: курсы, уроки, подписки, '
+        'платежи через Stripe и разграничение прав доступа.'
+    ),
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+    'SORT_OPERATIONS': False,
+    'TAGS': [
+        {'name': 'auth', 'description': 'Регистрация и JWT-токены'},
+        {'name': 'users', 'description': 'Пользователи и профили'},
+        {'name': 'courses', 'description': 'Курсы'},
+        {'name': 'lessons', 'description': 'Уроки'},
+        {'name': 'subscriptions', 'description': 'Подписки на обновления курсов'},
+        {'name': 'payments', 'description': 'Платежи и оплата через Stripe'},
     ],
 }
 
@@ -154,3 +185,10 @@ MAILERS = {
 }
 
 AUTH_USER_MODEL = 'users.User'  # Custom User-Modell
+
+# Stripe
+# Тестовый ключ берётся из .env, в репозиторий не попадает.
+STRIPE_API_KEY = os.getenv('STRIPE_API_KEY', '')
+# Куда Stripe вернёт пользователя после оплаты
+STRIPE_SUCCESS_URL = os.getenv('STRIPE_SUCCESS_URL', 'http://127.0.0.1:8000/api/payments/success/')
+STRIPE_CANCEL_URL = os.getenv('STRIPE_CANCEL_URL', 'http://127.0.0.1:8000/api/payments/cancel/')

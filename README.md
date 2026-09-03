@@ -8,12 +8,31 @@
 - Django 6.1
 - Django REST Framework
 - djangorestframework-simplejwt — JWT-авторизация
+- drf-spectacular — OpenAPI-документация
+- stripe — приём оплаты
 - django-filter
+- python-dotenv — переменные окружения
 - coverage — покрытие тестами
 - SQLite
 - Poetry
 
 ## Установка и запуск
+
+Скопируйте `.env.sample` в `.env` и заполните значения:
+
+```bash
+cp .env.sample .env
+```
+
+| Переменная | Зачем |
+|---|---|
+| `SECRET_KEY` | Ключ Django. Без него используется небезопасное значение по умолчанию |
+| `DEBUG` | `True` для разработки, `False` для боевого запуска |
+| `STRIPE_API_KEY` | Тестовый ключ из [дашборда Stripe](https://dashboard.stripe.com/test/apikeys), начинается на `sk_test_` |
+| `STRIPE_SUCCESS_URL` | Куда Stripe вернёт пользователя после успешной оплаты |
+| `STRIPE_CANCEL_URL` | Куда вернёт при отмене |
+
+Файл `.env` в репозиторий не попадает — он в `.gitignore`.
 
 ```bash
 poetry install --no-root
@@ -28,6 +47,24 @@ poetry run python manage.py runserver
 
 ```bash
 poetry run python manage.py createsuperuser
+```
+
+## Документация API
+
+Схема генерируется автоматически из кода библиотекой **drf-spectacular**. Все три адреса открыты без токена — документацию можно читать до логина.
+
+| Адрес | Что это |
+|---|---|
+| `/api/docs/` | Swagger UI — интерактивная документация, запросы можно отправлять прямо из браузера |
+| `/api/redoc/` | ReDoc — та же схема в виде читаемого справочника |
+| `/api/schema/` | Сырая схема OpenAPI 3 в формате YAML |
+
+Эндпоинты со стандартным поведением документируются автоматически. Нестандартные — подписка, создание платежа, проверка статуса — описаны вручную через `@extend_schema`: у них указаны тело запроса, коды ответов и примеры, потому что вывести это из сериализатора модели нельзя.
+
+Выгрузить схему в файл:
+
+```bash
+poetry run python manage.py spectacular --file schema.yml
 ```
 
 ## Структура проекта
@@ -148,6 +185,57 @@ POST /api/token/refresh/
 | PUT / PATCH | `/api/lessons/<id>/update/` | `UpdateAPIView` |
 | DELETE | `/api/lessons/<id>/delete/` | `DestroyAPIView` |
 
+## Оплата через Stripe
+
+Курс или урок можно оплатить картой. Работа с платёжным сервисом вынесена в `users/services.py` — вьюхи не знают, как устроен Stripe, и при смене эквайринга переписывать придётся только этот файл.
+
+### Как проходит платёж
+
+```
+POST /api/payments/create/  {"paid_course": 1}
+        │
+        ├─ 1. Product.create           → prod_xxx   название курса
+        ├─ 2. Price.create             → price_xxx  цена в копейках
+        └─ 3. checkout.Session.create  → cs_xxx + ссылка на оплату
+        │
+        ▼
+   Платёж сохранён: amount, stripe_product_id, stripe_price_id,
+   session_id, payment_link, status = pending
+        │
+        ▼
+   Пользователь открывает payment_link и платит
+        │
+        ▼
+GET /api/payments/<id>/status/  → Session.retrieve → status = paid
+```
+
+Ответ на создание платежа:
+
+```json
+{
+  "id": 7,
+  "paid_course": 1,
+  "amount": "12000.00",
+  "status": "pending",
+  "session_id": "cs_test_a1b2c3",
+  "payment_link": "https://checkout.stripe.com/c/pay/cs_test_a1b2c3"
+}
+```
+
+### Важные детали
+
+**Сумма не принимается от клиента.** Она берётся из поля `price` курса или урока — иначе цену можно было бы подделать в запросе.
+
+**Stripe считает в копейках.** `Price.create` получает `unit_amount = int(price * 100)`: 1234.56 ₽ уходит как 123456.
+
+**Ровно один объект.** В запросе указывается либо `paid_course`, либо `paid_lesson`. Оба сразу или ни одного — 400.
+
+**Ошибки Stripe отдаются как 502.** Недоступный сервис или неверный ключ — это не вина клиента, поэтому `502 Bad Gateway`, а не 400. Платёж при этом не создаётся.
+
+### Тестовые карты
+
+Аккаунт Stripe в тестовом режиме подтверждать не нужно. Для оплаты на странице Checkout подойдёт карта `4242 4242 4242 4242`, любая будущая дата и любой CVC. Остальные варианты — в [документации Stripe](https://docs.stripe.com/testing).
+
 ## Валидация ссылок
 
 В материалах курсов и уроков допускаются ссылки только на `youtube.com` и `youtu.be`. Проверяются поля `video_url` и `description`.
@@ -190,7 +278,9 @@ validators = [
 poetry run python manage.py test
 ```
 
-66 тестов: CRUD уроков и курсов для всех групп пользователей, валидатор ссылок, подписки, регистрация, JWT, профили, платежи.
+90 тестов: CRUD уроков и курсов для всех групп пользователей, валидатор ссылок, подписки, регистрация, JWT, профили, платежи, оплата через Stripe и доступность документации.
+
+Обращения к Stripe в тестах замоканы — реальный ключ и сеть не нужны, тесты проходят где угодно.
 
 Покрытие:
 
@@ -207,6 +297,8 @@ poetry run coverage html          # HTML-отчёт в htmlcov/
 | Метод | Эндпоинт | Описание |
 |---|---|---|
 | GET | `/api/payments/` | Список платежей с фильтрацией и сортировкой |
+| POST | `/api/payments/create/` | Создать платёж и получить ссылку на оплату |
+| GET | `/api/payments/<id>/status/` | Статус оплаты по данным Stripe |
 
 | Что нужно | Запрос |
 |---|---|
@@ -221,15 +313,17 @@ poetry run coverage html          # HTML-отчёт в htmlcov/
 
 ## Модели
 
-**Course** — название, превью, описание, владелец (FK на пользователя).
+**Course** — название, превью, описание, стоимость, владелец (FK на пользователя).
 
 **Subscription** — подписка: пользователь (FK), курс (FK), дата подписки. Пара «пользователь + курс» уникальна.
 
-**Lesson** — название, описание, превью, ссылка на видео, курс (FK, `related_name='lessons'`), владелец (FK на пользователя).
+**Lesson** — название, описание, превью, ссылка на видео, стоимость, курс (FK, `related_name='lessons'`), владелец (FK на пользователя).
 
 **User** — кастомная модель, `USERNAME_FIELD = 'email'`, плюс имя, фамилия, телефон, город, аватар.
 
 **Payment** — пользователь (FK), дата оплаты, оплаченный курс (FK, nullable), оплаченный урок (FK, nullable), сумма, способ оплаты (`cash` — наличные, `transfer` — перевод на счет).
+
+Плюс данные Stripe: `stripe_product_id`, `stripe_price_id`, `session_id`, `payment_link` и `status` (`pending` / `paid` / `canceled`).
 
 ### Целостность данных платежа
 
