@@ -8,6 +8,7 @@ from .views import (
     LessonListAPIView,
     LessonRetrieveAPIView,
     LessonUpdateAPIView,
+    SubscriptionAPIView,
 )
 
 app_name = 'lms'
@@ -24,4 +25,7 @@ urlpatterns = [
     path('lessons/<int:pk>/', LessonRetrieveAPIView.as_view(), name='lesson-detail'),
     path('lessons/<int:pk>/update/', LessonUpdateAPIView.as_view(), name='lesson-update'),
     path('lessons/<int:pk>/delete/', LessonDestroyAPIView.as_view(), name='lesson-delete'),
+
+    # Подписка на курс — переключатель
+    path('subscription/', SubscriptionAPIView.as_view(), name='subscription'),
 ]

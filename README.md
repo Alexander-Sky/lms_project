@@ -9,6 +9,7 @@
 - Django REST Framework
 - djangorestframework-simplejwt — JWT-авторизация
 - django-filter
+- coverage — покрытие тестами
 - SQLite
 - Poetry
 
@@ -118,7 +119,22 @@ POST /api/token/refresh/
 | PUT / PATCH | `/api/courses/<id>/` | Обновить |
 | DELETE | `/api/courses/<id>/` | Удалить |
 
-Реализовано через `ModelViewSet` + `DefaultRouter`. Ответ содержит вычисляемое поле `lessons_count` и вложенный список `lessons`.
+Реализовано через `ModelViewSet` + `DefaultRouter`. Ответ содержит вычисляемое поле `lessons_count`, вложенный список `lessons` и признак `is_subscribed` — подписан ли текущий пользователь на обновления курса.
+
+### Подписка на обновления курса
+
+| Метод | Эндпоинт | Описание |
+|---|---|---|
+| POST | `/api/subscription/` | Переключатель подписки |
+
+Тело запроса — `{"course_id": 1}`. Один эндпоинт работает как переключатель: подписки нет — создаётся, есть — удаляется.
+
+```json
+{ "message": "подписка добавлена" }
+{ "message": "подписка удалена" }
+```
+
+Пара «пользователь + курс» уникальна на уровне базы (`UniqueConstraint`), так что дубль подписки создать нельзя даже в обход API.
 
 ### Уроки
 
@@ -131,6 +147,60 @@ POST /api/token/refresh/
 | GET | `/api/lessons/<id>/` | `RetrieveAPIView` |
 | PUT / PATCH | `/api/lessons/<id>/update/` | `UpdateAPIView` |
 | DELETE | `/api/lessons/<id>/delete/` | `DestroyAPIView` |
+
+## Валидация ссылок
+
+В материалах курсов и уроков допускаются ссылки только на `youtube.com` и `youtu.be`. Проверяются поля `video_url` и `description`.
+
+Валидатор лежит в `lms/validators.py` и подключается в `Meta` сериализатора:
+
+```python
+validators = [
+    LinksValidator(field='video_url'),
+    LinksValidator(field='description'),
+]
+```
+
+Он вытаскивает из текста все http/https-ссылки и сверяет хост. Поддомены YouTube проходят, а похожие на вид домены вроде `youtube.com.evil.ru` — нет: сравнивается именно хост, а не подстрока.
+
+При нарушении возвращается 400 с понятным текстом:
+
+```json
+{
+  "video_url": [
+    "В материалах можно размещать ссылки только на youtube.com. Запрещённые ссылки: https://vimeo.com/123456"
+  ]
+}
+```
+
+## Пагинация
+
+Классы пагинации в `lms/paginators.py`:
+
+| Класс | `page_size` | `max_page_size` |
+|---|---|---|
+| `CoursePaginator` | 3 | 10 |
+| `LessonPaginator` | 5 | 20 |
+
+Размер страницы переопределяется параметром запроса: `?page_size=10`. Списки курсов и уроков отдаются в формате `{count, next, previous, results}`.
+
+## Тесты
+
+```bash
+poetry run python manage.py test
+```
+
+66 тестов: CRUD уроков и курсов для всех групп пользователей, валидатор ссылок, подписки, регистрация, JWT, профили, платежи.
+
+Покрытие:
+
+```bash
+poetry run coverage run manage.py test
+poetry run coverage report > coverage.txt
+poetry run coverage html          # HTML-отчёт в htmlcov/
+```
+
+Текущий результат — **99%**, отчёт сохранён в `coverage.txt`. Настройки покрытия в `.coveragerc`: миграции, сами тесты и служебные файлы Django из подсчёта исключены.
 
 ### Платежи
 
@@ -152,6 +222,8 @@ POST /api/token/refresh/
 ## Модели
 
 **Course** — название, превью, описание, владелец (FK на пользователя).
+
+**Subscription** — подписка: пользователь (FK), курс (FK), дата подписки. Пара «пользователь + курс» уникальна.
 
 **Lesson** — название, описание, превью, ссылка на видео, курс (FK, `related_name='lessons'`), владелец (FK на пользователя).
 
