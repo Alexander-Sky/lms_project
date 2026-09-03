@@ -60,11 +60,16 @@ def retrieve_stripe_session(session_id: str) -> dict:
     https://docs.stripe.com/api/checkout/sessions/retrieve
     """
     session = stripe.checkout.Session.retrieve(session_id)
+
+    # Stripe отдаёт не словарь, а объект StripeObject: у него нет метода .get(),
+    # хотя обращение по ключу работает. Приводим к словарю явно.
+    data = session.to_dict() if hasattr(session, 'to_dict') else dict(session)
+
     return {
-        'id': session['id'],
-        'status': session.get('status'),
-        'payment_status': session.get('payment_status'),
-        'amount_total': session.get('amount_total'),
-        'currency': session.get('currency'),
-        'url': session.get('url'),
+        'id': data.get('id'),
+        'status': data.get('status'),
+        'payment_status': data.get('payment_status'),
+        'amount_total': data.get('amount_total'),
+        'currency': data.get('currency'),
+        'url': data.get('url'),
     }

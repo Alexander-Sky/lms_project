@@ -501,13 +501,32 @@ class StripeServiceTestCase(APITestCase):
         self.assertEqual(mocked.call_args.kwargs['mode'], 'payment')
 
     def test_retrieve_returns_status_fields(self):
-        stripe_session = {
-            'id': 'cs_1', 'status': 'complete', 'payment_status': 'paid',
-            'amount_total': 123456, 'currency': 'rub', 'url': None,
-        }
+        """Stripe отдаёт StripeObject, а не словарь: у него нет метода .get().
 
-        with patch('stripe.checkout.Session.retrieve', return_value=stripe_session):
+        Раньше здесь стоял обычный dict — тест был зелёный, а живой запрос падал
+        с AttributeError. Подделка ведёт себя как настоящий объект Stripe.
+        """
+        class FakeStripeObject:
+            _data = {
+                'id': 'cs_1', 'status': 'complete', 'payment_status': 'paid',
+                'amount_total': 123456, 'currency': 'rub', 'url': None,
+            }
+
+            def to_dict(self):
+                return dict(self._data)
+
+            def __getattr__(self, item):
+                if item in self._DICT_METHODS:
+                    raise AttributeError(
+                        f"'{item}' is a dict method, but a Session is not a dict."
+                    )
+                return self._data[item]
+
+            _DICT_METHODS = ('get', 'keys', 'values', 'items')
+
+        with patch('stripe.checkout.Session.retrieve', return_value=FakeStripeObject()):
             data = retrieve_stripe_session('cs_1')
 
         self.assertEqual(data['payment_status'], 'paid')
         self.assertEqual(data['amount_total'], 123456)
+        self.assertEqual(data['id'], 'cs_1')
