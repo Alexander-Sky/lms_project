@@ -68,3 +68,19 @@ class SubscriptionSerializer(serializers.ModelSerializer):
         model = Subscription
         fields = ('id', 'user', 'course', 'created_at')
         read_only_fields = ('user', 'created_at')
+
+
+class SubscriptionRequestSerializer(serializers.Serializer):
+    """Тело запроса на переключение подписки."""
+
+    course_id = serializers.IntegerField(
+        help_text='ID курса, на обновления которого переключается подписка.',
+    )
+
+
+class SubscriptionResponseSerializer(serializers.Serializer):
+    """Ответ эндпоинта подписки."""
+
+    message = serializers.CharField(
+        help_text='«подписка добавлена» или «подписка удалена».',
+    )
