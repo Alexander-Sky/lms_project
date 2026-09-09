@@ -1,14 +1,18 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
 import stripe
+from django.conf import settings
+from django.test import override_settings
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from lms.models import Course, Lesson
 from users.models import Payment, User
+from users.tasks import block_inactive_users
 from users.services import (
     create_stripe_price,
     create_stripe_product,
@@ -530,3 +534,87 @@ class StripeServiceTestCase(APITestCase):
         self.assertEqual(data['payment_status'], 'paid')
         self.assertEqual(data['amount_total'], 123456)
         self.assertEqual(data['id'], 'cs_1')
+
+
+class BlockInactiveUsersTaskTestCase(APITestCase):
+    """Периодическая задача блокировки давно не заходивших пользователей."""
+
+    def setUp(self):
+        now = timezone.now()
+
+        self.forgotten = User.objects.create(
+            email='forgotten@test.ru', last_login=now - timedelta(days=40),
+        )
+        self.borderline = User.objects.create(
+            email='borderline@test.ru', last_login=now - timedelta(days=29),
+        )
+        self.recent = User.objects.create(
+            email='recent@test.ru', last_login=now - timedelta(hours=2),
+        )
+        self.never_logged_in = User.objects.create(email='fresh@test.ru')
+        self.already_blocked = User.objects.create(
+            email='blocked@test.ru', last_login=now - timedelta(days=100), is_active=False,
+        )
+
+    def test_long_inactive_user_is_blocked(self):
+        block_inactive_users()
+
+        self.forgotten.refresh_from_db()
+        self.assertFalse(self.forgotten.is_active)
+
+    def test_user_within_limit_stays_active(self):
+        block_inactive_users()
+
+        self.borderline.refresh_from_db()
+        self.recent.refresh_from_db()
+        self.assertTrue(self.borderline.is_active)
+        self.assertTrue(self.recent.is_active)
+
+    def test_user_who_never_logged_in_is_not_blocked(self):
+        """last_login = NULL: человек зарегистрировался, но ещё не входил."""
+        block_inactive_users()
+
+        self.never_logged_in.refresh_from_db()
+        self.assertTrue(self.never_logged_in.is_active)
+
+    def test_returns_number_of_blocked(self):
+        self.assertEqual(block_inactive_users(), 1)
+
+    def test_already_blocked_not_counted_twice(self):
+        block_inactive_users()
+        self.assertEqual(block_inactive_users(), 0)
+
+    def test_update_is_done_in_one_query(self):
+        """Обновление батчем, а не циклом с save() по каждому."""
+        User.objects.create(email='old1@test.ru', last_login=timezone.now() - timedelta(days=50))
+        User.objects.create(email='old2@test.ru', last_login=timezone.now() - timedelta(days=60))
+
+        with self.assertNumQueries(1):
+            blocked = block_inactive_users()
+
+        self.assertEqual(blocked, 3)
+
+    def test_limit_comes_from_settings(self):
+        with override_settings(INACTIVITY_DAYS_LIMIT=7):
+            blocked = block_inactive_users()
+
+        self.assertEqual(blocked, 2)
+
+
+class CelerySettingsTestCase(APITestCase):
+    """Настройки Celery: таймзона и расписание."""
+
+    def test_celery_timezone_matches_django(self):
+        self.assertEqual(settings.CELERY_TIMEZONE, settings.TIME_ZONE)
+
+    def test_broker_is_configured(self):
+        self.assertTrue(settings.CELERY_BROKER_URL)
+
+    def test_block_task_is_scheduled(self):
+        tasks = [entry['task'] for entry in settings.CELERY_BEAT_SCHEDULE.values()]
+        self.assertIn('users.tasks.block_inactive_users', tasks)
+
+    def test_celery_app_is_importable(self):
+        from config.celery import app
+
+        self.assertEqual(app.main, 'config')
