@@ -14,6 +14,7 @@ from users.permissions import IsModer, IsOwner
 
 from .models import Course, Lesson, Subscription
 from .paginators import CoursePaginator, LessonPaginator
+from .services import notify_course_subscribers, touch_course
 from .serializers import (
     CourseSerializer,
     LessonSerializer,
@@ -86,6 +87,16 @@ class CourseViewSet(OwnerQuerysetMixin, viewsets.ModelViewSet):
         """Владельцем курса становится тот, кто его создал."""
         serializer.save(owner=self.request.user)
 
+    def perform_update(self, serializer):
+        """После успешного обновления уведомляем подписчиков курса.
+
+        Прошлое значение updated_at читаем до save(): поле стоит с auto_now
+        и после сохранения покажет текущий момент, а нам нужно предыдущее.
+        """
+        previous_updated_at = serializer.instance.updated_at
+        course = serializer.save()
+        notify_course_subscribers(course, previous_updated_at)
+
 
 @extend_schema(
     tags=['lessons'],
@@ -108,7 +119,13 @@ class LessonCreateAPIView(generics.CreateAPIView):
     permission_classes = (IsAuthenticated, ~IsModer)
 
     def perform_create(self, serializer):
-        serializer.save(owner=self.request.user)
+        lesson = serializer.save(owner=self.request.user)
+
+        # Новый урок — это тоже обновление материалов курса
+        course = lesson.course
+        previous_updated_at = course.updated_at
+        touch_course(course)
+        notify_course_subscribers(course, previous_updated_at)
 
 
 @extend_schema(
@@ -155,6 +172,21 @@ class LessonUpdateAPIView(generics.UpdateAPIView):
     queryset = Lesson.objects.all()
     serializer_class = LessonSerializer
     permission_classes = (IsAuthenticated, IsModer | IsOwner)
+
+    def perform_update(self, serializer):
+        """Правка урока — это обновление материалов курса.
+
+        Курс сам по себе не сохраняется, поэтому его updated_at обновляем
+        вручную. Уведомление уйдёт, только если курс не обновлялся дольше
+        лимита, — иначе правка десяти уроков подряд дала бы десять писем.
+        """
+        course = serializer.instance.course
+        previous_updated_at = course.updated_at
+
+        serializer.save()
+
+        touch_course(course)
+        notify_course_subscribers(course, previous_updated_at)
 
 
 @extend_schema(
