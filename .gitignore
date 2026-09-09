@@ -78,3 +78,8 @@ desktop.ini
 # ===========================
 # */migrations/*.py
 # !*/migrations/__init__.py
+
+# Celery
+celerybeat-schedule
+celerybeat-schedule.*
+celerybeat.pid
