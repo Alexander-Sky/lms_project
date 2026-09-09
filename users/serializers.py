@@ -104,3 +104,59 @@ class UserSerializer(serializers.ModelSerializer):
         """Сумма всех платежей пользователя — считает база одним SELECT SUM()."""
         total = obj.payments.aggregate(total=Sum('amount'))['total']
         return float(total or 0)
+
+
+class PaymentCreateSerializer(serializers.ModelSerializer):
+    """Создание платежа: на вход курс или урок, на выход — ссылка на оплату.
+
+    Сумма не принимается от клиента, а берётся из стоимости объекта —
+    иначе цену можно было бы подделать в запросе.
+    """
+
+    class Meta:
+        model = Payment
+        fields = (
+            'id',
+            'paid_course',
+            'paid_lesson',
+            'payment_method',
+            'amount',
+            'payment_date',
+            'status',
+            'session_id',
+            'payment_link',
+        )
+        read_only_fields = (
+            'amount',
+            'payment_date',
+            'status',
+            'session_id',
+            'payment_link',
+        )
+
+    def validate(self, attrs):
+        course = attrs.get('paid_course')
+        lesson = attrs.get('paid_lesson')
+
+        if bool(course) == bool(lesson):
+            raise serializers.ValidationError(
+                'Укажите ровно одно поле: paid_course или paid_lesson.'
+            )
+
+        item = course or lesson
+        if item.price <= 0:
+            raise serializers.ValidationError(
+                {'price': f'У объекта «{item}» не указана стоимость — оплатить его нельзя.'}
+            )
+        return attrs
+
+
+class PaymentStatusSerializer(serializers.Serializer):
+    """Данные сессии оплаты, полученные из Stripe."""
+
+    id = serializers.CharField(help_text='ID сессии в Stripe.')
+    status = serializers.CharField(help_text='open, complete или expired.')
+    payment_status = serializers.CharField(help_text='paid, unpaid или no_payment_required.')
+    amount_total = serializers.IntegerField(help_text='Сумма в копейках.', allow_null=True)
+    currency = serializers.CharField(allow_null=True)
+    url = serializers.CharField(allow_null=True, help_text='Ссылка на оплату, пока сессия открыта.')

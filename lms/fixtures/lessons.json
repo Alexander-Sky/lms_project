@@ -8,7 +8,8 @@
       "description": "Как DRF превращает объекты модели в JSON и обратно.",
       "preview": "",
       "video_url": "https://www.youtube.com/watch?v=UmljXZIypDc",
-      "owner": 1
+      "owner": 1,
+      "price": "1500.00"
     }
   },
   {
@@ -20,7 +21,8 @@
       "description": "Вычисляемые поля: считаем количество уроков курса.",
       "preview": "",
       "video_url": "https://www.youtube.com/watch?v=t-uAgI-AaXE",
-      "owner": 1
+      "owner": 1,
+      "price": "1500.00"
     }
   },
   {
@@ -32,7 +34,8 @@
       "description": "Выводим связанные объекты внутри родительского сериализатора.",
       "preview": "",
       "video_url": "https://youtu.be/dQw4w9WgXcQ",
-      "owner": 1
+      "owner": 1,
+      "price": "1500.00"
     }
   },
   {
@@ -44,7 +47,8 @@
       "description": "Основные коллекции Python и когда какую выбирать.",
       "preview": "",
       "video_url": "https://www.youtube.com/watch?v=rfscVS0vtbw",
-      "owner": 2
+      "owner": 2,
+      "price": "1500.00"
     }
   }
 ]

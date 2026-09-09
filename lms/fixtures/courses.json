@@ -6,7 +6,8 @@
       "name": "Django REST Framework с нуля",
       "preview": "",
       "description": "Курс о том, как строить REST API на Django: сериализаторы, вьюсеты, дженерики, фильтрация.",
-      "owner": 1
+      "owner": 1,
+      "price": "12000.00"
     }
   },
   {
@@ -16,7 +17,8 @@
       "name": "Основы Python",
       "preview": "",
       "description": "Базовый курс: типы данных, функции, ООП, работа с файлами.",
-      "owner": 2
+      "owner": 2,
+      "price": "8000.00"
     }
   }
 ]
