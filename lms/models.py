@@ -22,6 +22,13 @@ class Course(models.Model):
         verbose_name='Владелец',
         **NULLABLE,
     )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        verbose_name='Дата последнего обновления',
+        # nullable, чтобы миграция не требовала одноразовое значение
+        # для уже существующих курсов
+        **NULLABLE,
+    )
 
     class Meta:
         verbose_name = "Курс"

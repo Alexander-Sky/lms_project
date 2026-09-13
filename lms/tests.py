@@ -1,9 +1,15 @@
+from datetime import timedelta
+from unittest.mock import patch
+
 from django.contrib.auth.models import Group
+from django.core import mail
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from lms.models import Course, Lesson, Subscription
+from lms.tasks import send_course_update_email
 from users.models import User
 
 YOUTUBE_URL = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
@@ -356,3 +362,162 @@ class LmsModelTestCase(LmsBaseTestCase):
 
         self.assertIn(self.owner.email, str(subscription))
         self.assertIn(self.course.name, str(subscription))
+
+
+class CourseUpdateNotificationTestCase(LmsBaseTestCase):
+    """Рассылка подписчикам при обновлении курса.
+
+    Celery в тестах не запускается: подменяется сам вызов .delay(),
+    поэтому брокер и воркер не нужны.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.subscriber = User.objects.create(email='subscriber@test.ru')
+        Subscription.objects.create(user=self.subscriber, course=self.course)
+
+        self.course_url = reverse('lms:course-detail', args=(self.course.pk,))
+        self.lesson_url = reverse('lms:lesson-update', args=(self.lesson.pk,))
+        self.client.force_authenticate(user=self.owner)
+
+    def _make_stale(self):
+        """Отматывает updated_at курса на пять часов назад.
+
+        update() идёт мимо auto_now — обычный save() тут же переписал бы
+        поле текущим временем.
+        """
+        Course.objects.filter(pk=self.course.pk).update(
+            updated_at=timezone.now() - timedelta(hours=5),
+        )
+        self.course.refresh_from_db()
+
+    def test_notification_after_course_update(self):
+        self._make_stale()
+
+        with patch('lms.services.send_course_update_email.delay') as mocked:
+            response = self.client.patch(self.course_url, {'description': 'Новое описание'})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mocked.assert_called_once_with(self.course.pk)
+
+    def test_no_notification_if_course_was_updated_recently(self):
+        """Курс только что создан — писать подписчикам рано."""
+        with patch('lms.services.send_course_update_email.delay') as mocked:
+            self.client.patch(self.course_url, {'description': 'Правка через минуту'})
+
+        mocked.assert_not_called()
+
+    def test_notification_after_lesson_update(self):
+        self._make_stale()
+
+        with patch('lms.services.send_course_update_email.delay') as mocked:
+            response = self.client.patch(self.lesson_url, {'name': 'Урок обновлён'})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mocked.assert_called_once_with(self.course.pk)
+
+    def test_lesson_update_touches_course(self):
+        """После правки урока курс считается обновлённым."""
+        self._make_stale()
+        before = self.course.updated_at
+
+        with patch('lms.services.send_course_update_email.delay'):
+            self.client.patch(self.lesson_url, {'name': 'Урок обновлён'})
+
+        self.course.refresh_from_db()
+        self.assertGreater(self.course.updated_at, before)
+
+    def test_second_lesson_update_is_silent(self):
+        """Правка десяти уроков подряд не должна дать десять писем."""
+        self._make_stale()
+
+        with patch('lms.services.send_course_update_email.delay') as mocked:
+            self.client.patch(self.lesson_url, {'name': 'Правка 1'})
+            self.client.patch(self.lesson_url, {'name': 'Правка 2'})
+            self.client.patch(self.lesson_url, {'name': 'Правка 3'})
+
+        self.assertEqual(mocked.call_count, 1)
+
+    def test_new_lesson_notifies_subscribers(self):
+        self._make_stale()
+
+        with patch('lms.services.send_course_update_email.delay') as mocked:
+            response = self.client.post(reverse('lms:lesson-create'), {
+                'name': 'Совсем новый урок',
+                'course': self.course.pk,
+                'video_url': YOUTUBE_URL,
+            })
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        mocked.assert_called_once_with(self.course.pk)
+
+    def test_broker_failure_does_not_break_update(self):
+        """Redis лёг — курс всё равно должен обновиться."""
+        self._make_stale()
+
+        with patch('lms.services.send_course_update_email.delay',
+                   side_effect=ConnectionError('Redis недоступен')):
+            response = self.client.patch(self.course_url, {'description': 'Правка без брокера'})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.course.refresh_from_db()
+        self.assertEqual(self.course.description, 'Правка без брокера')
+
+
+class SendCourseUpdateEmailTaskTestCase(LmsBaseTestCase):
+    """Сама задача рассылки — вызывается напрямую, без Celery."""
+
+    def setUp(self):
+        super().setUp()
+        self.first = User.objects.create(email='first@test.ru')
+        self.second = User.objects.create(email='second@test.ru')
+
+    def test_letter_per_subscriber(self):
+        Subscription.objects.create(user=self.first, course=self.course)
+        Subscription.objects.create(user=self.second, course=self.course)
+
+        sent = send_course_update_email(self.course.pk)
+
+        self.assertEqual(sent, 2)
+        self.assertEqual(len(mail.outbox), 2)
+
+    def test_each_letter_has_single_recipient(self):
+        """Адреса подписчиков не должны быть видны друг другу."""
+        Subscription.objects.create(user=self.first, course=self.course)
+        Subscription.objects.create(user=self.second, course=self.course)
+
+        send_course_update_email(self.course.pk)
+
+        for letter in mail.outbox:
+            self.assertEqual(len(letter.to), 1)
+
+    def test_course_name_in_subject(self):
+        Subscription.objects.create(user=self.first, course=self.course)
+
+        send_course_update_email(self.course.pk)
+
+        self.assertIn(self.course.name, mail.outbox[0].subject)
+
+    def test_no_subscribers_no_letters(self):
+        sent = send_course_update_email(self.course.pk)
+
+        self.assertEqual(sent, 0)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_deleted_course_does_not_break_task(self):
+        """Курс удалили, пока задача ждала в очереди."""
+        course_id = self.course.pk
+        self.lesson.delete()
+        self.course.delete()
+
+        self.assertEqual(send_course_update_email(course_id), 0)
+
+    def test_only_subscribers_of_this_course(self):
+        other_course = Course.objects.create(name='Другой курс', owner=self.owner)
+        Subscription.objects.create(user=self.first, course=self.course)
+        Subscription.objects.create(user=self.second, course=other_course)
+
+        send_course_update_email(self.course.pk)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [self.first.email])
