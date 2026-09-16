@@ -10,7 +10,15 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+import os
+from datetime import timedelta
 from pathlib import Path
+
+from celery.schedules import crontab
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -20,10 +28,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-rj#rxh#j_80o7b_#7$ll!v0$q9(@lsw%+c(!e$wj&45#mvziaj'
+SECRET_KEY = os.getenv(
+    'SECRET_KEY',
+    'django-insecure-rj#rxh#j_80o7b_#7$ll!v0$q9(@lsw%+c(!e$wj&45#mvziaj',
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
 ALLOWED_HOSTS = []
 
@@ -37,10 +48,56 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'rest_framework',      # DRF
-    'users',               # User-App
-    'lms',                 # Course + Lesson
+    'rest_framework',                    # DRF
+    'rest_framework_simplejwt',          # JWT-Authentifizierung
+    'drf_spectacular',                   # OpenAPI-Dokumentation
+    'django_filters',                    # Filter für DRF
+    'users',                             # User-App
+    'lms',                               # Course + Lesson
 ]
+
+# DRF: аутентификация, права и фильтры на уровне всего проекта.
+# По умолчанию каждый эндпоинт закрыт — доступ только с JWT-токеном.
+# Открытые эндпоинты (регистрация, получение токена) объявляют AllowAny явно.
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.OrderingFilter',
+    ],
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+# Настройки генератора OpenAPI-документации
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'LMS API',
+    'DESCRIPTION': (
+        'API учебной платформы: курсы, уроки, подписки, '
+        'платежи через Stripe и разграничение прав доступа.'
+    ),
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+    'SORT_OPERATIONS': False,
+    'TAGS': [
+        {'name': 'auth', 'description': 'Регистрация и JWT-токены'},
+        {'name': 'users', 'description': 'Пользователи и профили'},
+        {'name': 'courses', 'description': 'Курсы'},
+        {'name': 'lessons', 'description': 'Уроки'},
+        {'name': 'subscriptions', 'description': 'Подписки на обновления курсов'},
+        {'name': 'payments', 'description': 'Платежи и оплата через Stripe'},
+    ],
+}
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+}
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -122,11 +179,51 @@ STATIC_URL = 'static/'
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
+# По умолчанию письма печатаются в консоль — для разработки этого достаточно.
+# Чтобы слать по-настоящему, задайте в .env EMAIL_BACKEND и параметры SMTP.
 
-MAILERS = {
-    'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
+EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
+EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
+EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True') == 'True'
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER or 'lms@example.com')
+
+AUTH_USER_MODEL = 'users.User'  # Custom User-Modell
+
+# Stripe
+# Тестовый ключ берётся из .env, в репозиторий не попадает.
+STRIPE_API_KEY = os.getenv('STRIPE_API_KEY', '')
+# Куда Stripe вернёт пользователя после оплаты
+STRIPE_SUCCESS_URL = os.getenv('STRIPE_SUCCESS_URL', 'http://127.0.0.1:8000/api/payments/success/')
+STRIPE_CANCEL_URL = os.getenv('STRIPE_CANCEL_URL', 'http://127.0.0.1:8000/api/payments/cancel/')
+
+# Celery
+# Брокер и бэкенд результатов — Redis, параметры подключения из .env.
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_ACCEPT_CONTENT = ['json']
+
+# Таймзона Celery обязана совпадать с таймзоной Django,
+# иначе периодические задачи запускаются не в то время.
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_ENABLE_UTC = USE_TZ
+
+# Расписание периодических задач для celery-beat
+CELERY_BEAT_SCHEDULE = {
+    'block-inactive-users-every-night': {
+        'task': 'users.tasks.block_inactive_users',
+        # Каждый день в 03:00 по TIME_ZONE проекта
+        'schedule': crontab(hour=3, minute=0),
     },
 }
 
-AUTH_USER_MODEL = 'users.User'  # Custom User-Modell
+# Сколько пользователь может не заходить, прежде чем его заблокируют
+INACTIVITY_DAYS_LIMIT = int(os.getenv('INACTIVITY_DAYS_LIMIT', 30))
+
+# Как часто максимум уведомлять подписчиков об обновлении одного курса
+COURSE_UPDATE_NOTIFY_HOURS = int(os.getenv('COURSE_UPDATE_NOTIFY_HOURS', 4))
