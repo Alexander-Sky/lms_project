@@ -36,7 +36,13 @@ SECRET_KEY = os.getenv(
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = []
+# В контейнере Django отвечает не на localhost, а на имя сервиса,
+# поэтому список хостов задаётся переменной окружения
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,0.0.0.0').split(',')
+    if host.strip()
+]
 
 
 # Application definition
@@ -132,10 +138,17 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
+# PostgreSQL вместо SQLite: SQLite — это файл, и он не переживает
+# ни пересоздание контейнера, ни обращение из нескольких сервисов сразу.
+# Параметры подключения приходят из .env, хост — имя сервиса из compose.
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': os.getenv('DB_ENGINE', 'django.db.backends.postgresql'),
+        'NAME': os.getenv('POSTGRES_DB', 'lms'),
+        'USER': os.getenv('POSTGRES_USER', 'lms'),
+        'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'lms'),
+        'HOST': os.getenv('POSTGRES_HOST', 'localhost'),
+        'PORT': os.getenv('POSTGRES_PORT', '5432'),
     }
 }
 
@@ -175,6 +188,13 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# Куда collectstatic складывает файлы. В контейнере этот каталог
+# смонтирован томом, иначе статика админки пропадала бы при пересборке.
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+MEDIA_URL = 'media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 
 
 # Email

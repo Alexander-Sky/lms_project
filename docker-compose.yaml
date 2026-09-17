@@ -1,0 +1,94 @@
+# Весь проект одной командой: docker compose up -d --build
+#
+# Наружу открыт только web. База и Redis объявлены через expose:
+# они доступны другим контейнерам по имени сервиса, но порт на хост
+# не пробрасывается — снаружи к ним не подключиться.
+
+services:
+
+  db:
+    image: postgres:17-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    expose:
+      - "5432"
+    volumes:
+      # Без этого тома база живёт внутри контейнера и исчезает вместе с ним
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # Контейнер поднимается раньше, чем Postgres готов принимать запросы.
+      # Без проверки web стартует первым и падает на migrate
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    restart: always
+    # appendonly — Redis пишет журнал на диск, очередь переживёт перезапуск
+    command: redis-server --appendonly yes
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build: .
+    restart: always
+    env_file: .env
+    ports:
+      # Единственный сервис с пробросом порта: к нему обращается браузер
+      - "8000:8000"
+    volumes:
+      - static_data:/app/staticfiles
+      - media_data:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py collectstatic --noinput &&
+             python manage.py runserver 0.0.0.0:8000"
+
+  celery:
+    build: .
+    restart: always
+    env_file: .env
+    volumes:
+      - media_data:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A config worker -l info
+
+  celery-beat:
+    build: .
+    restart: always
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Расписание хранится в /tmp: файл одноразовый, при перезапуске
+    # beat пересоздаст его из CELERY_BEAT_SCHEDULE в настройках
+    command: celery -A config beat -l info --schedule /tmp/celerybeat-schedule
+
+volumes:
+  postgres_data:
+  redis_data:
+  static_data:
+  media_data:

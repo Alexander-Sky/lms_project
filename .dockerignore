@@ -1,0 +1,51 @@
+# Всё перечисленное не попадает в контекст сборки.
+# Чем меньше контекст, тем быстрее сборка и тем меньше образ.
+
+# Git и IDE
+.git
+.gitignore
+.idea
+.vscode
+
+# Виртуальные окружения хоста: внутри образа своё, чужое сломает пути
+.venv
+venv
+ENV
+env
+
+# Кэш Python
+__pycache__
+*.py[cod]
+*.egg-info
+
+# Секреты. Переменные приходят из docker-compose, а не из образа:
+# файл, попавший в слой, остаётся в нём навсегда и виден всем, у кого есть образ
+.env
+.env.local
+.env.*.local
+
+# Локальная база и данные разработки
+*.sqlite3
+db.sqlite3
+media
+staticfiles
+
+# Отчёты и кэши инструментов
+.coverage
+.coverage.*
+coverage.txt
+htmlcov
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.tox
+
+# Celery
+celerybeat-schedule
+celerybeat-schedule.*
+celerybeat.pid
+
+# Сама инфраструктура внутри образа не нужна
+Dockerfile
+.dockerignore
+docker-compose.yaml
