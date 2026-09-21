@@ -50,6 +50,8 @@ static/
 .env
 .env.local
 .env.*.local
+# Собирается GitHub Actions из секретов при деплое
+.env.production
 secrets.json
 *.key
 *.pem
