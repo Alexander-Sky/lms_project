@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 #
-# Первичная настройка сервера под проект. Запускается ОДИН раз, от root,
+# Первичная настройка сервера под проект. Запускается один раз
 # на чистой Ubuntu 22.04 или 24.04:
 #
-#   bash server-setup.sh "ssh-ed25519 AAAA... github-actions"
+#   bash server-setup.sh "ssh-ed25519 AAAA... github-actions"        # вошли как root
+#   sudo bash server-setup.sh "ssh-ed25519 AAAA... github-actions"   # вошли как свой пользователь
 #
 # Аргумент — публичный ключ, с которым будет заходить GitHub Actions.
 #
@@ -13,6 +14,9 @@
 #   3. закрывает вход по паролю, оставляя только SSH-ключи;
 #   4. включает firewall: снаружи открыты только SSH (22) и HTTP (80).
 #
+# Подходит для любого провайдера: запускайте от root (Hetzner) или
+# через sudo от своего пользователя (Yandex Cloud, AWS).
+#
 # Скрипт можно запускать повторно — уже сделанные шаги он пропустит.
 
 set -euo pipefail
@@ -21,7 +25,7 @@ DEPLOY_USER="deploy"
 CI_PUBLIC_KEY="${1:-}"
 
 if [[ $EUID -ne 0 ]]; then
-    echo "Запускать нужно от root" >&2
+    echo "Запускать нужно от root или через sudo" >&2
     exit 1
 fi
 
@@ -31,10 +35,29 @@ if [[ "$CI_PUBLIC_KEY" != ssh-* ]]; then
     exit 1
 fi
 
-# Без хотя бы одного ключа у root после отключения паролей
-# на сервер будет не зайти. Проверяем до того, как что-то менять
-if [[ ! -s /root/.ssh/authorized_keys ]]; then
-    echo "У root нет SSH-ключей в /root/.ssh/authorized_keys." >&2
+# Откуда взять личный ключ владельца сервера. У разных провайдеров по-разному:
+#   Hetzner — входим сразу под root, ключ лежит у root;
+#   Yandex Cloud, AWS — входим под своим пользователем и запускаем через sudo,
+#   ключ лежит у этого пользователя, а у root его нет.
+if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
+    owner_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+    personal_keys_file="${owner_home}/.ssh/authorized_keys"
+else
+    personal_keys_file="/root/.ssh/authorized_keys"
+fi
+
+# Берём только строки, которые начинаются с типа ключа. Облачные образы
+# Ubuntu кладут root строки с ограничениями:
+#   no-port-forwarding,...,command="echo 'Please login as ubuntu'" ssh-ed25519 ...
+# Скопируй такую строку пользователю deploy — и вход под ним будет
+# печатать это сообщение и сразу отключаться
+KEY_PATTERN='^(ssh-|ecdsa-|sk-)'
+personal_keys="$(grep -E "$KEY_PATTERN" "$personal_keys_file" 2>/dev/null || true)"
+
+# Без хотя бы одного личного ключа после отключения паролей на сервер
+# будет не зайти. Проверяем до того, как что-то менять
+if [[ -z "$personal_keys" ]]; then
+    echo "Не найден ваш SSH-ключ в ${personal_keys_file}." >&2
     echo "Сначала добавьте свой ключ при создании сервера — иначе" >&2
     echo "после отключения паролей вы потеряете доступ." >&2
     exit 1
@@ -75,10 +98,10 @@ ssh_dir="/home/${DEPLOY_USER}/.ssh"
 keys_file="${ssh_dir}/authorized_keys"
 install -d -m 700 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "$ssh_dir"
 touch "$keys_file"
-# Личный ключ (тот же, что у root) — чтобы заходить самому,
-# и ключ GitHub Actions — чтобы заходил деплой. Без дублей
-cat /root/.ssh/authorized_keys "$keys_file" <(echo "$CI_PUBLIC_KEY") \
-    | grep -v '^\s*$' | sort -u > "${keys_file}.new"
+# Личный ключ — чтобы заходить самому, и ключ GitHub Actions —
+# чтобы заходил деплой. Без дублей и без строк с ограничениями
+{ echo "$personal_keys"; cat "$keys_file"; echo "$CI_PUBLIC_KEY"; } \
+    | grep -E "$KEY_PATTERN" | sort -u > "${keys_file}.new"
 mv "${keys_file}.new" "$keys_file"
 chown "$DEPLOY_USER:$DEPLOY_USER" "$keys_file"
 chmod 600 "$keys_file"
