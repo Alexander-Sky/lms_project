@@ -49,3 +49,7 @@ celerybeat.pid
 Dockerfile
 .dockerignore
 docker-compose.yaml
+docker-compose.prod.yaml
+nginx
+deploy
+.github

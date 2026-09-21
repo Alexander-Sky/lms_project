@@ -44,6 +44,15 @@ ALLOWED_HOSTS = [
     if host.strip()
 ]
 
+# Откуда разрешены POST-запросы с формами (вход в админку).
+# За Nginx Django должен знать публичный адрес сервера, иначе
+# проверка CSRF отклонит форму входа. Формат: http://1.2.3.4
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',')
+    if origin.strip()
+]
+
 
 # Application definition
 
