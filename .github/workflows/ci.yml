@@ -4,14 +4,13 @@
 # тесты даже не запускаются; упал хоть один тест — образ не собирается
 # и на сервер ничего не уезжает.
 #
-# Линт и тесты идут на любой push и на PR в main.
-# Каждый push, прошедший тесты, собирает образ и выкатывает его на сервер —
-# это и есть непрерывный деплой. На PR деплоя нет: тот же коммит уже
-# выкатился при push, и второй раз гонять его незачем.
+# Линт, тесты и пробная сборка идут на любой push и на PR в main —
+# так ошибка видна сразу, в той ветке, где она появилась.
 #
-# Сервер один, разработчик один — поэтому деплоится любая ветка. В команде
-# деплой ограничили бы веткой main, чтобы непроверенный код из чужой
-# ветки не попадал на боевой сервер.
+# Публикация образа и деплой — только из ветки main: при push в неё
+# или при ручном запуске (Actions → CI/CD → Run workflow). Push в рабочую
+# или экспериментальную ветку боевой сервер не трогает — туда попадает
+# только то, что прошло через pull request.
 
 name: CI/CD
 
@@ -172,20 +171,20 @@ jobs:
       # GITHUB_TOKEN выдаётся на один запуск и сам истекает после него —
       # хранить отдельный пароль от реестра не нужно
       - name: Войти в GitHub Container Registry
-        if: github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # На PR образ только собирается — проверяем, что Dockerfile не сломан.
-      # На push — ещё и публикуется, чтобы сервер мог его скачать
+      # В рабочих ветках и на PR образ только собирается — проверяем, что
+      # Dockerfile не сломан. Из main — ещё и публикуется для деплоя
       - name: Собрать и опубликовать образ
         uses: docker/build-push-action@v7
         with:
           context: .
-          push: ${{ github.event_name != 'pull_request' }}
+          push: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
           tags: |
             ${{ steps.image.outputs.name }}
             ${{ steps.image.outputs.latest }}
@@ -195,7 +194,7 @@ jobs:
   deploy:
     name: Деплой на сервер
     needs: build
-    if: github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
