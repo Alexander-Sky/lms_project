@@ -1,0 +1,4 @@
+# Shell-скрипты исполняются на Linux-сервере. Если git на Windows
+# (core.autocrlf true) превратит переводы строк в CRLF, bash упадёт
+# с ошибкой "$'\r': command not found". Для .sh всегда храним LF.
+*.sh text eol=lf

@@ -1,0 +1,326 @@
+# Конвейер: линт → тесты → сборка образа → деплой.
+#
+# Каждый этап начинается, только если предыдущий прошёл. Упал flake8 —
+# тесты даже не запускаются; упал хоть один тест — образ не собирается
+# и на сервер ничего не уезжает.
+#
+# Линт, тесты и пробная сборка идут на любой push и на PR в main —
+# так ошибка видна сразу, в той ветке, где она появилась.
+#
+# Публикация образа и деплой — только из ветки main: при push в неё
+# или при ручном запуске (Actions → CI/CD → Run workflow). Push в рабочую
+# или экспериментальную ветку боевой сервер не трогает — туда попадает
+# только то, что прошло через pull request.
+
+name: CI/CD
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.14'
+  POETRY_VERSION: '2.4.3'
+
+jobs:
+
+  lint:
+    name: Линт (flake8)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Получить код
+        uses: actions/checkout@v6
+
+      - name: Установить Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # Для линта не нужны зависимости проекта — только сам flake8.
+      # Так этап занимает секунды и падает первым, до тяжёлых тестов
+      - name: Установить flake8
+        run: pip install "flake8>=7.3,<8"
+
+      # Правила берутся из setup.cfg — те же, что и локально
+      - name: Проверить стиль
+        run: flake8 .
+
+  test:
+    name: Тесты
+    needs: lint
+    runs-on: ubuntu-latest
+
+    # Тесты идут на настоящем PostgreSQL, как в бою, а не на SQLite:
+    # у этих баз разное поведение, и SQLite скрыл бы часть ошибок
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: lms
+          POSTGRES_USER: lms
+          POSTGRES_PASSWORD: lms_ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lms -d lms"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # Тестовые значения, живут только внутри этого запуска.
+    # Настоящих секретов тестам не нужно: Stripe и почта замоканы
+    env:
+      SECRET_KEY: ci-only-secret-key-not-used-anywhere-else
+      DEBUG: 'False'
+      POSTGRES_DB: lms
+      POSTGRES_USER: lms
+      POSTGRES_PASSWORD: lms_ci_password
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: '5432'
+      CELERY_BROKER_URL: redis://localhost:6379/0
+      CELERY_RESULT_BACKEND: redis://localhost:6379/0
+
+    steps:
+      - name: Получить код
+        uses: actions/checkout@v6
+
+      - name: Установить Python
+        id: python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # Кэш пакетов и окружения Poetry: ключ зависит от poetry.lock, так что
+      # пока зависимости не менялись, установка берётся из кэша
+      - name: Кэш зависимостей
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/pypoetry
+          key: poetry-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            poetry-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
+
+      # pipx ставит Poetry в отдельное окружение: его собственные
+      # зависимости не смешиваются с зависимостями проекта
+      - name: Установить Poetry
+        run: pipx install "poetry==${POETRY_VERSION}"
+
+      # Интерпретатор указываем явно. pipx на раннере работает на системном
+      # Python Ubuntu (3.12), и без этой строки Poetry попытался бы поставить
+      # проект, которому нужен 3.14, в своё собственное окружение
+      - name: Установить зависимости
+        run: |
+          poetry env use "${{ steps.python.outputs.python-path }}"
+          poetry install --no-root --with dev
+
+      - name: Проверить конфигурацию Django
+        run: poetry run python manage.py check
+
+      # Недостающая миграция — частая причина «локально работает, на
+      # сервере падает». Ловим её здесь, до деплоя
+      - name: Проверить, что миграции не забыты
+        run: poetry run python manage.py makemigrations --check --dry-run
+
+      - name: Запустить тесты с покрытием
+        run: poetry run coverage run manage.py test
+
+      # Покрытие ниже 80% — тоже ошибка: деплой не пойдёт
+      - name: Отчёт о покрытии
+        run: poetry run coverage report --fail-under=80
+
+  build:
+    name: Сборка образа
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+    steps:
+      - name: Получить код
+        uses: actions/checkout@v6
+
+      # В имени образа в реестре допустимы только строчные буквы,
+      # а имя репозитория — Alexander-Sky/lms_project. Приводим к нижнему
+      # регистру. Тег — хэш коммита: по нему всегда видно, какая версия
+      # запущена на сервере, и можно откатиться на любую прошлую
+      - name: Имя образа
+        id: image
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"
+          echo "name=ghcr.io/${repo}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "latest=ghcr.io/${repo}:latest" >> "$GITHUB_OUTPUT"
+
+      - name: Подготовить Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Входим в реестр только когда будем публиковать. Встроенный
+      # GITHUB_TOKEN выдаётся на один запуск и сам истекает после него —
+      # хранить отдельный пароль от реестра не нужно
+      - name: Войти в GitHub Container Registry
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # В рабочих ветках и на PR образ только собирается — проверяем, что
+      # Dockerfile не сломан. Из main — ещё и публикуется для деплоя
+      - name: Собрать и опубликовать образ
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+          tags: |
+            ${{ steps.image.outputs.name }}
+            ${{ steps.image.outputs.latest }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Деплой на сервер
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    # Два деплоя одновременно передрались бы за контейнеры.
+    # Следующий ждёт, пока закончится текущий
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    environment: production
+
+    # Секреты передаются через env, а не подставляются прямо в команды:
+    # если в значении окажется кавычка или $, оно не станет частью скрипта
+    env:
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      DEPLOY_DIR: lms_project
+      IMAGE: ${{ needs.build.outputs.image }}
+
+    steps:
+      - name: Получить код
+        uses: actions/checkout@v6
+
+      - name: Настроить SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          cat > ~/.ssh/config <<EOF
+          Host server
+            HostName $SSH_HOST
+            User $SSH_USER
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+          EOF
+
+      # .env для сервера собирается здесь из секретов репозитория.
+      # В git его нет, руками на сервере его никто не правит:
+      # сменил секрет в настройках GitHub — при следующем деплое он приедет
+      - name: Собрать .env из секретов
+        env:
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          STRIPE_API_KEY: ${{ secrets.STRIPE_API_KEY }}
+          EMAIL_HOST_USER: ${{ secrets.EMAIL_HOST_USER }}
+          EMAIL_HOST_PASSWORD: ${{ secrets.EMAIL_HOST_PASSWORD }}
+        run: |
+          umask 077
+          cat > .env.production <<EOF
+          SECRET_KEY='${SECRET_KEY}'
+          DEBUG=False
+          ALLOWED_HOSTS=${SSH_HOST}
+          CSRF_TRUSTED_ORIGINS=http://${SSH_HOST}
+          POSTGRES_DB=lms
+          POSTGRES_USER=lms
+          POSTGRES_PASSWORD='${POSTGRES_PASSWORD}'
+          POSTGRES_HOST=db
+          POSTGRES_PORT=5432
+          CELERY_BROKER_URL=redis://redis:6379/0
+          CELERY_RESULT_BACKEND=redis://redis:6379/0
+          STRIPE_API_KEY='${STRIPE_API_KEY}'
+          STRIPE_SUCCESS_URL=http://${SSH_HOST}/api/payments/success/
+          STRIPE_CANCEL_URL=http://${SSH_HOST}/api/payments/cancel/
+          EMAIL_HOST_USER='${EMAIL_HOST_USER}'
+          EMAIL_HOST_PASSWORD='${EMAIL_HOST_PASSWORD}'
+          DEFAULT_FROM_EMAIL='${EMAIL_HOST_USER}'
+          INACTIVITY_DAYS_LIMIT=30
+          COURSE_UPDATE_NOTIFY_HOURS=4
+          WEB_IMAGE=${IMAGE}
+          EOF
+
+      # DEPLOY_DIR подставляется на раннере (SC2029 — намеренно),
+      # а ~ раскрывает уже сервер — в домашний каталог пользователя деплоя
+      - name: Скопировать конфигурацию на сервер
+        run: |
+          # shellcheck disable=SC2029
+          ssh server "mkdir -p ~/${DEPLOY_DIR}/nginx"
+          scp docker-compose.prod.yaml "server:~/${DEPLOY_DIR}/docker-compose.prod.yaml"
+          scp nginx/default.conf "server:~/${DEPLOY_DIR}/nginx/default.conf"
+          scp .env.production "server:~/${DEPLOY_DIR}/.env"
+          # shellcheck disable=SC2029
+          ssh server "chmod 600 ~/${DEPLOY_DIR}/.env"
+
+      # Токен для скачивания образа живёт только на время этого запуска.
+      # После pull выходим из реестра, чтобы токен не остался на сервере.
+      #
+      # Переменные в heredoc раскрываются на раннере (SC2087 — намеренно):
+      # токен уезжает на сервер внутри скрипта через stdin и читается
+      # встроенной командой echo. Так он не попадает ни в аргументы процессов,
+      # ни в историю команд — ps на сервере его не покажет
+      - name: Обновить контейнеры
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          # shellcheck disable=SC2087
+          ssh server bash -se <<EOF
+          cd ~/${DEPLOY_DIR}
+          echo '${GHCR_TOKEN}' | docker login ghcr.io -u '${GHCR_USER}' --password-stdin
+          docker compose -f docker-compose.prod.yaml pull
+          docker logout ghcr.io
+          docker compose -f docker-compose.prod.yaml up -d --remove-orphans
+          docker image prune -f
+          docker compose -f docker-compose.prod.yaml ps
+          EOF
+
+      # Деплой считается успешным, только если приложение реально отвечает.
+      # Миграции и сборка статики при старте занимают секунды — ждём до 2 минут
+      - name: Проверить, что приложение отвечает
+        run: |
+          for i in $(seq 1 24); do
+            if curl -fsS -o /dev/null "http://${SSH_HOST}/api/docs/"; then
+              echo "Приложение отвечает: http://${SSH_HOST}/api/docs/"
+              exit 0
+            fi
+            echo "Попытка $i: ещё не готово, ждём 5 секунд"
+            sleep 5
+          done
+          echo "Приложение не ответило за 2 минуты"
+          # shellcheck disable=SC2029
+          ssh server "cd ~/${DEPLOY_DIR} && docker compose -f docker-compose.prod.yaml logs --tail 50 web"
+          exit 1
+
+      - name: Убрать ключ и .env с раннера
+        if: always()
+        run: rm -f ~/.ssh/deploy_key .env.production

@@ -334,7 +334,10 @@ class PaymentCreateTestCase(APITestCase):
         return (
             patch('users.views.create_stripe_product', return_value='prod_TEST'),
             patch('users.views.create_stripe_price', return_value='price_TEST'),
-            patch('users.views.create_stripe_session', return_value=('cs_test_123', 'https://checkout.stripe.com/pay/cs_test_123')),
+            patch(
+                'users.views.create_stripe_session',
+                return_value=('cs_test_123', 'https://checkout.stripe.com/pay/cs_test_123'),
+            ),
         )
 
     def test_anonymous_cannot_create_payment(self):

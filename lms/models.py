@@ -38,6 +38,7 @@ class Course(models.Model):
     def __str__(self):
         return self.name
 
+
 class Lesson(models.Model):
     """Модель урока"""
     course = models.ForeignKey(

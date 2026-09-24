@@ -1,0 +1,118 @@
+# Боевая конфигурация для сервера.
+# Отличия от docker-compose.yaml (локальная разработка):
+#   - вместо runserver работает Gunicorn, перед ним стоит Nginx;
+#   - образ не собирается на сервере, а скачивается готовым из GHCR —
+#     его собирает и публикует GitHub Actions после прохождения тестов;
+#   - наружу открыт только порт 80, и только у Nginx.
+#
+# Запуск на сервере: docker compose -f docker-compose.prod.yaml up -d
+
+services:
+
+  db:
+    image: postgres:17-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    restart: always
+    command: redis-server --appendonly yes
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    # Точный тег образа (хэш коммита) пишет в .env GitHub Actions при деплое.
+    # Так на сервере всегда известно, какая именно версия кода запущена
+    image: ${WEB_IMAGE}
+    restart: always
+    env_file: .env
+    expose:
+      - "8000"
+    volumes:
+      - static_data:/app/staticfiles
+      - media_data:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Три воркера — разумный старт для сервера на 1–2 ядра.
+    # Логи Gunicorn идут в stdout, их видно через docker compose logs.
+    #
+    # Команда Gunicorn целиком в одной строке — это важно. Внутри sh -c
+    # перенос строки завершает команду: строки с && склеиваются, а вот
+    # --bind на отдельной строке shell выполнил бы как новую команду,
+    # и Gunicorn слушал бы 127.0.0.1 — Nginx получил бы 502.
+    #
+    # exec заменяет sh на Gunicorn: он становится главным процессом
+    # контейнера (PID 1) и сам получает SIGTERM при остановке. Без exec
+    # сигнал достаётся sh, тот его игнорирует, и через 10 секунд Docker
+    # убивает контейнер жёстко — вместе с запросами, которые были в работе
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py collectstatic --noinput &&
+             exec gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --access-logfile -"
+
+  celery:
+    image: ${WEB_IMAGE}
+    restart: always
+    env_file: .env
+    volumes:
+      - media_data:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A config worker -l info
+
+  celery-beat:
+    image: ${WEB_IMAGE}
+    restart: always
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A config beat -l info --schedule /tmp/celerybeat-schedule
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: always
+    ports:
+      # Единственный порт, открытый в интернет
+      - "80:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      # Статику и медиа Nginx читает из тех же томов, куда их пишет web
+      - static_data:/app/staticfiles:ro
+      - media_data:/app/media:ro
+    depends_on:
+      - web
+
+volumes:
+  postgres_data:
+  redis_data:
+  static_data:
+  media_data:
